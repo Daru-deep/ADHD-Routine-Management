@@ -53,7 +53,7 @@ data class WeeklySummaryData(
 )
 
 class ProgressViewModel(
-    repository: TaskRepository,
+    private val repository: TaskRepository,
     private val weeklyGoalRepository: WeeklyGoalRepository
 ) : ViewModel() {
 
@@ -78,7 +78,11 @@ class ProgressViewModel(
         val dailyRecords  = repository.getRecentRecords(7)
             .first()
             .filter { it.date >= from && it.date <= to }
-        val weeklyGoal    = weeklyGoalRepository.getGoalForWeekOnce(weekStart.toString())
+        val goal = weeklyGoalRepository.getGoalForWeekOnce(weekStart.toString())
+        val weeklyGoal: WeeklyGoalWithTasks? = if (goal != null) {
+            val tasks = weeklyGoalRepository.getTasksForGoal(goal.id).first()
+            WeeklyGoalWithTasks(goal, tasks)
+        } else null
         val healthRecords = repository.getHealthRecordsForRange(from, to)
         val weekLabel     = "${weekStart.monthValue}/${weekStart.dayOfMonth}（月）〜" +
                             "${weekEnd.monthValue}/${weekEnd.dayOfMonth}（日）"
