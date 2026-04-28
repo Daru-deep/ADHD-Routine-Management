@@ -16,7 +16,9 @@ class TaskAlarmReceiver : BroadcastReceiver() {
         val snoozeMins   = intent.getIntExtra(EXTRA_SNOOZE_MINUTES, 10)
         if (taskId == -1) return
 
+        // 個別タスク通知を出した後、グループサマリーを更新して複数通知を1つに束ねる
         NotificationHelper.showTaskNotification(context, taskId, taskName, snoozeMins)
+        NotificationHelper.updateTaskGroupSummary(context)
     }
 
     companion object {

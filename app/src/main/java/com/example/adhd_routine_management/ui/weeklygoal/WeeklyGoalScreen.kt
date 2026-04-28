@@ -182,6 +182,13 @@ fun WeeklyGoalScreen(
                         fontWeight = FontWeight.Bold
                     )
                 }
+                // 達成履歴サマリーカード
+                item {
+                    GoalHistorySummaryCard(
+                        pastGoals = state.pastGoals,
+                        pastGoalTasksMap = state.pastGoalTasksMap
+                    )
+                }
                 items(state.pastGoals, key = { it.id }) { goal ->
                     val tasks = state.pastGoalTasksMap[goal.id] ?: emptyList()
                     PastGoalCard(goal = goal, tasks = tasks)
@@ -324,6 +331,92 @@ private fun NoGoalCard(onSetupClick: () -> Unit) {
                 Text("今週の目標を設定する")
             }
         }
+    }
+}
+
+// ========== 達成履歴サマリーカード ==========
+
+/**
+ * 過去の目標を集計して全体の達成傾向を表示するカード。
+ * 「目標を立てた週数」「全タスク達成した週数」「平均達成率」の3指標を表示する。
+ */
+@Composable
+private fun GoalHistorySummaryCard(
+    pastGoals: List<WeeklyGoal>,
+    pastGoalTasksMap: Map<Int, List<WeeklyGoalTask>>
+) {
+    val totalWeeks  = pastGoals.size
+    val fullAchievedWeeks = pastGoals.count { goal ->
+        val tasks = pastGoalTasksMap[goal.id] ?: emptyList()
+        tasks.isNotEmpty() && tasks.all { it.isCompleted }
+    }
+    val avgRate = if (totalWeeks == 0) 0f else {
+        pastGoals.map { goal ->
+            val tasks = pastGoalTasksMap[goal.id] ?: emptyList()
+            if (tasks.isEmpty()) 0f else tasks.count { it.isCompleted }.toFloat() / tasks.size
+        }.average().toFloat()
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = DarkSurface)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                "達成履歴",
+                style = MaterialTheme.typography.titleMedium,
+                color = TextSecondary
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ) {
+                GoalStatItem(
+                    label = "目標設定",
+                    value = "${totalWeeks}週",
+                    color = PrimaryTeal
+                )
+                GoalStatItem(
+                    label = "全達成",
+                    value = "${fullAchievedWeeks}週",
+                    color = SuccessGreen
+                )
+                GoalStatItem(
+                    label = "平均達成率",
+                    value = "${(avgRate * 100).toInt()}%",
+                    color = WarningAmber
+                )
+            }
+            Spacer(modifier = Modifier.height(10.dp))
+            LinearProgressIndicator(
+                progress = { avgRate },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(6.dp)
+                    .clip(RoundedCornerShape(3.dp)),
+                color = when {
+                    avgRate >= 0.8f -> SuccessGreen
+                    avgRate >= 0.5f -> PrimaryTeal
+                    else            -> WarningAmber
+                },
+                trackColor = DarkSurfaceVar
+            )
+        }
+    }
+}
+
+@Composable
+private fun GoalStatItem(label: String, value: String, color: androidx.compose.ui.graphics.Color) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(
+            value,
+            style = MaterialTheme.typography.headlineSmall,
+            color = color,
+            fontWeight = FontWeight.Bold
+        )
+        Text(label, style = MaterialTheme.typography.labelSmall, color = TextSecondary)
     }
 }
 

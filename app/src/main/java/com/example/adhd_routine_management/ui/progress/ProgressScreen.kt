@@ -1,41 +1,36 @@
 package com.example.adhd_routine_management.ui.progress
 
-import android.net.Uri
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Download
-import androidx.compose.material.icons.filled.Image
-import androidx.compose.material.icons.filled.Upload
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.example.adhd_routine_management.backup.BackupManager
 import com.example.adhd_routine_management.data.database.entity.DailyRecord
 import com.example.adhd_routine_management.data.database.entity.HealthRecord
+import com.example.adhd_routine_management.data.database.entity.TimeSlot
 import com.example.adhd_routine_management.data.database.entity.UserProgress
 import com.example.adhd_routine_management.data.repository.TaskRepository
-import com.example.adhd_routine_management.data.repository.WeeklyGoalRepository
-import com.example.adhd_routine_management.data.repository.WeeklyGoalWithTasks
 import com.example.adhd_routine_management.domain.model.CharacterStage
-import com.example.adhd_routine_management.export.WeeklySummaryExporter
 import com.example.adhd_routine_management.ui.theme.*
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import java.time.DayOfWeek
 import java.time.LocalDate
@@ -44,17 +39,8 @@ import java.time.LocalDate
 // ViewModel
 // ────────────────────────────────────────────
 
-/** 週次サマリー用のデータをまとめたデータクラス */
-data class WeeklySummaryData(
-    val weekLabel: String,
-    val dailyRecords: List<DailyRecord>,
-    val weeklyGoal: WeeklyGoalWithTasks?,
-    val healthRecords: List<HealthRecord>
-)
-
 class ProgressViewModel(
-    private val repository: TaskRepository,
-    private val weeklyGoalRepository: WeeklyGoalRepository
+    private val repository: TaskRepository
 ) : ViewModel() {
 
     val progress: StateFlow<UserProgress?> = repository.getProgress()
@@ -63,186 +49,42 @@ class ProgressViewModel(
     val recentRecords: StateFlow<List<DailyRecord>> = repository.getRecentRecords(30)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    /**
-     * 今週のまとめデータ（月〜日）を取得する。
-     * suspend 関数として呼び出し側がコルーチンで使う。
-     */
-    suspend fun loadWeeklySummary(): WeeklySummaryData {
-        val today = LocalDate.now()
-        // 今週の月曜日を起点にする（DayOfWeek.MONDAY = 1）
-        val weekStart = today.with(DayOfWeek.MONDAY)
-        val weekEnd   = weekStart.plusDays(6)
-        val from = weekStart.toString()
-        val to   = weekEnd.toString()
+    /** 今月の体調記録（週次・月次カード表示用） */
+    private val _healthRecords = MutableStateFlow<List<HealthRecord>>(emptyList())
+    val healthRecords: StateFlow<List<HealthRecord>> = _healthRecords.asStateFlow()
 
-        val dailyRecords  = repository.getRecentRecords(7)
-            .first()
-            .filter { it.date >= from && it.date <= to }
-        val goal = weeklyGoalRepository.getGoalForWeekOnce(weekStart.toString())
-        val weeklyGoal: WeeklyGoalWithTasks? = if (goal != null) {
-            val tasks = weeklyGoalRepository.getTasksForGoal(goal.id).first()
-            WeeklyGoalWithTasks(goal, tasks)
-        } else null
-        val healthRecords = repository.getHealthRecordsForRange(from, to)
-        val weekLabel     = "${weekStart.monthValue}/${weekStart.dayOfMonth}（月）〜" +
-                            "${weekEnd.monthValue}/${weekEnd.dayOfMonth}（日）"
-
-        return WeeklySummaryData(weekLabel, dailyRecords, weeklyGoal, healthRecords)
+    init {
+        viewModelScope.launch {
+            val today = LocalDate.now()
+            val from = today.withDayOfMonth(1).toString()
+            val to   = today.toString()
+            _healthRecords.value = repository.getHealthRecordsForRange(from, to)
+        }
     }
 
     companion object {
-        fun factory(
-            repository: TaskRepository,
-            weeklyGoalRepository: WeeklyGoalRepository
-        ) = object : ViewModelProvider.Factory {
+        fun factory(repository: TaskRepository) = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T =
-                ProgressViewModel(repository, weeklyGoalRepository) as T
+                ProgressViewModel(repository) as T
         }
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ProgressScreen(
-    repository: TaskRepository,
-    weeklyGoalRepository: WeeklyGoalRepository
-) {
+fun ProgressScreen(repository: TaskRepository) {
     val vm: ProgressViewModel = viewModel(
-        factory = ProgressViewModel.factory(repository, weeklyGoalRepository)
+        factory = ProgressViewModel.factory(repository)
     )
-    val progress by vm.progress.collectAsStateWithLifecycle()
-    val records  by vm.recentRecords.collectAsStateWithLifecycle()
-    val context  = LocalContext.current
-    val scope    = rememberCoroutineScope()
+    val progress      by vm.progress.collectAsStateWithLifecycle()
+    val records       by vm.recentRecords.collectAsStateWithLifecycle()
+    val healthRecords by vm.healthRecords.collectAsStateWithLifecycle()
 
-    // バックアップ結果のスナックバー表示用
-    val snackbarHostState = remember { SnackbarHostState() }
-
-    // 週次サマリー：保存形式選択ダイアログの表示状態
-    var showSummaryDialog by remember { mutableStateOf(false) }
-    // 週次サマリーデータ（ダイアログ表示時にロード）
-    var summaryData by remember { mutableStateOf<WeeklySummaryData?>(null) }
-
-    // 画像保存ランチャー（PNG）
-    val imageSaveLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument("image/png")
-    ) { uri: Uri? ->
-        if (uri != null) {
-            scope.launch {
-                val data = summaryData ?: return@launch
-                val ok = WeeklySummaryExporter.exportImage(
-                    context, uri, data.weekLabel,
-                    data.dailyRecords, data.weeklyGoal, data.healthRecords
-                )
-                snackbarHostState.showSnackbar(
-                    if (ok) "まとめ画像を保存しました" else "画像の保存に失敗しました"
-                )
-            }
-        }
-    }
-
-    // CSV保存ランチャー
-    val csvSaveLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument("text/csv")
-    ) { uri: Uri? ->
-        if (uri != null) {
-            scope.launch {
-                val data = summaryData ?: return@launch
-                val ok = WeeklySummaryExporter.exportCsv(
-                    context, uri,
-                    data.dailyRecords, data.weeklyGoal, data.healthRecords
-                )
-                snackbarHostState.showSnackbar(
-                    if (ok) "CSVを保存しました" else "CSVの保存に失敗しました"
-                )
-            }
-        }
-    }
-
-    // 週次サマリー形式選択ダイアログ
-    if (showSummaryDialog) {
-        AlertDialog(
-            onDismissRequest = { showSummaryDialog = false },
-            containerColor = DarkSurface,
-            title = { Text("今週のまとめを保存", color = TextPrimary, fontWeight = FontWeight.Bold) },
-            text = { Text("保存する形式を選んでください。", color = TextSecondary) },
-            confirmButton = {
-                TextButton(onClick = {
-                    showSummaryDialog = false
-                    val fileName = "weekly_summary_${LocalDate.now()}.png"
-                    imageSaveLauncher.launch(fileName)
-                }) {
-                    Text("画像（PNG）", color = PrimaryTeal)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = {
-                    showSummaryDialog = false
-                    val fileName = "weekly_summary_${LocalDate.now()}.csv"
-                    csvSaveLauncher.launch(fileName)
-                }) {
-                    Text("CSV", color = SecondaryBlue)
-                }
-            }
-        )
-    }
-
-    // エクスポート：ファイル保存先をユーザーに選ばせるランチャー
-    val exportLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument("application/json")
-    ) { uri: Uri? ->
-        if (uri != null) {
-            scope.launch {
-                val ok = BackupManager.exportToUri(context, uri, repository, weeklyGoalRepository)
-                snackbarHostState.showSnackbar(
-                    if (ok) "バックアップを保存しました" else "バックアップに失敗しました"
-                )
-            }
-        }
-    }
-
-    // インポート：ファイルをユーザーに選ばせるランチャー
-    val importLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument()
-    ) { uri: Uri? ->
-        if (uri != null) {
-            scope.launch {
-                val ok = BackupManager.importFromUri(context, uri, repository, weeklyGoalRepository)
-                snackbarHostState.showSnackbar(
-                    if (ok) "データを復元しました" else "復元に失敗しました（ファイル形式を確認してください）"
-                )
-            }
-        }
-    }
-
-    // リストア確認ダイアログ
-    var showRestoreConfirm by remember { mutableStateOf(false) }
-    if (showRestoreConfirm) {
-        AlertDialog(
-            onDismissRequest = { showRestoreConfirm = false },
-            containerColor = DarkSurface,
-            title = { Text("データを復元しますか？", color = TextPrimary, fontWeight = FontWeight.Bold) },
-            text = { Text("現在のデータはすべてバックアップファイルの内容で上書きされます。", color = TextSecondary) },
-            confirmButton = {
-                TextButton(onClick = {
-                    showRestoreConfirm = false
-                    importLauncher.launch(arrayOf("application/json"))
-                }) {
-                    Text("復元する", color = ErrorRed)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showRestoreConfirm = false }) {
-                    Text("キャンセル", color = PrimaryTeal)
-                }
-            }
-        )
-    }
+    var isRecordsExpanded by remember { mutableStateOf(true) }
 
     Scaffold(
         containerColor = DarkBackground,
-        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text("進捗・実績", color = TextPrimary) },
@@ -272,41 +114,43 @@ fun ProgressScreen(
                 }
             }
 
-            // 週次サマリーカード
+            // 今週の体調カード
             item {
-                WeeklySummaryCard(
-                    onGenerateSummary = {
-                        scope.launch {
-                            summaryData = vm.loadWeeklySummary()
-                            showSummaryDialog = true
-                        }
-                    }
-                )
+                WeeklyHealthCard(healthRecords = healthRecords)
             }
 
-            // バックアップカード
+            // 今月の体調カード
             item {
-                BackupCard(
-                    onExport = {
-                        val fileName = "adhd_backup_${LocalDate.now()}.json"
-                        exportLauncher.launch(fileName)
-                    },
-                    onImport = { showRestoreConfirm = true }
-                )
+                MonthlyHealthCard(healthRecords = healthRecords)
             }
 
-            // 直近30日の記録
+            // 直近30日の記録（タップで折りたたみ/展開）
             if (records.isNotEmpty()) {
                 item {
-                    Text(
-                        "直近の記録",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = TextPrimary,
-                        modifier = Modifier.padding(top = 4.dp)
-                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { isRecordsExpanded = !isRecordsExpanded }
+                            .padding(top = 4.dp, bottom = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "直近の記録",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = TextPrimary
+                        )
+                        Icon(
+                            imageVector = if (isRecordsExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                            contentDescription = if (isRecordsExpanded) "折りたたむ" else "展開する",
+                            tint = TextSecondary
+                        )
+                    }
                 }
-                items(records) { record ->
-                    DailyRecordRow(record)
+                if (isRecordsExpanded) {
+                    items(records) { record ->
+                        DailyRecordRow(record)
+                    }
                 }
             }
         }
@@ -314,93 +158,205 @@ fun ProgressScreen(
 }
 
 /**
- * 今週のまとめを画像またはCSVで保存するカード。
- * ボタンを押すと形式選択ダイアログが開く。
+ * 今週（月〜日）の体調記録をグリッド表示するカード。
+ * 行 = スロット（朝/昼/夕）、列 = 曜日（月〜日）
+ * スコアは 8以上→緑、5〜7→青緑、4以下→赤 でカラーコード。
  */
 @Composable
-private fun WeeklySummaryCard(onGenerateSummary: () -> Unit) {
+private fun WeeklyHealthCard(healthRecords: List<HealthRecord>) {
+    val today     = LocalDate.now()
+    val weekStart = today.with(DayOfWeek.MONDAY)
+    val days      = (0..6).map { weekStart.plusDays(it.toLong()) }
+    val dayLabels = listOf("月", "火", "水", "木", "金", "土", "日")
+    val slots     = listOf(TimeSlot.MORNING, TimeSlot.NOON, TimeSlot.EVENING)
+    val slotLabels = listOf("朝", "昼", "夕")
+
+    // 日付 → スロット → スコア の2段マップを作成
+    val recordMap = healthRecords
+        .filter { it.date >= weekStart.toString() }
+        .groupBy { it.date }
+        .mapValues { (_, recs) -> recs.associate { it.timeSlot to it.score } }
+
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = DarkSurface)
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
-            Text(
-                "今週のまとめ",
-                style = MaterialTheme.typography.titleMedium,
-                color = TextSecondary
-            )
+            Text("今週の体調", style = MaterialTheme.typography.titleMedium, color = TextSecondary)
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // ヘッダー行（曜日）
+            Row(modifier = Modifier.fillMaxWidth()) {
+                Spacer(modifier = Modifier.width(24.dp))
+                days.forEachIndexed { i, day ->
+                    Text(
+                        text = dayLabels[i],
+                        modifier = Modifier.weight(1f),
+                        textAlign = TextAlign.Center,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (day == today) PrimaryTeal else TextHint,
+                        fontWeight = if (day == today) FontWeight.Bold else FontWeight.Normal
+                    )
+                }
+            }
             Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                "達成タスク・週間目標・体調グラフを画像またはCSVで保存できます。",
-                style = MaterialTheme.typography.labelSmall,
-                color = TextHint
-            )
-            Spacer(modifier = Modifier.height(12.dp))
-            Button(
-                onClick = onGenerateSummary,
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(10.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = PrimaryTeal)
-            ) {
-                Icon(
-                    Icons.Default.Image,
-                    contentDescription = null,
-                    modifier = Modifier.size(16.dp)
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text("まとめを生成・保存する", color = DarkBackground)
+
+            // データ行（スロットごと）
+            slots.forEachIndexed { slotIdx, slot ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = slotLabels[slotIdx],
+                        modifier = Modifier.width(24.dp),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = TextSecondary
+                    )
+                    days.forEach { day ->
+                        val score = recordMap[day.toString()]?.get(slot)
+                        Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                            if (score != null) {
+                                val scoreColor = when {
+                                    score >= 8 -> SuccessGreen
+                                    score >= 5 -> PrimaryTeal
+                                    else       -> ErrorRed
+                                }
+                                Text(
+                                    text = "$score",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = scoreColor,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            } else {
+                                Text(
+                                    text = "-",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = TextHint.copy(alpha = 0.4f)
+                                )
+                            }
+                        }
+                    }
+                }
+                if (slotIdx < slots.size - 1) Spacer(modifier = Modifier.height(4.dp))
             }
         }
     }
 }
 
+/**
+ * 今月の体調を週ごとの平均で表示するカード。
+ * 各週の朝/昼/夕の平均スコアをコンパクトな行で表示する。
+ */
 @Composable
-private fun BackupCard(onExport: () -> Unit, onImport: () -> Unit) {
+private fun MonthlyHealthCard(healthRecords: List<HealthRecord>) {
+    val today      = LocalDate.now()
+    val monthStart = today.withDayOfMonth(1)
+
+    // 今月の記録のみ絞り込む
+    val monthRecords = healthRecords.filter { it.date >= monthStart.toString() }
+
+    // 今月に含まれる週（月曜始まり）を列挙する
+    val weeks = mutableListOf<LocalDate>()
+    var w = monthStart.with(DayOfWeek.MONDAY)
+    if (w.isAfter(monthStart)) w = w.minusWeeks(1) // 月初が月曜でない場合の前週も含む
+    while (!w.isAfter(today)) {
+        if (w.plusDays(6) >= monthStart) weeks.add(w)
+        w = w.plusWeeks(1)
+    }
+
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = DarkSurface)
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
-            Text("データ管理", style = MaterialTheme.typography.titleMedium, color = TextSecondary)
-            Spacer(modifier = Modifier.height(12.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                // バックアップボタン
-                OutlinedButton(
-                    onClick = onExport,
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(10.dp),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = PrimaryTeal)
-                ) {
-                    Icon(Icons.Default.Upload, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("バックアップ")
+            Text("今月の体調平均", style = MaterialTheme.typography.titleMedium, color = TextSecondary)
+            Spacer(modifier = Modifier.height(10.dp))
+
+            if (monthRecords.isEmpty()) {
+                Text(
+                    "まだ記録がありません",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextHint
+                )
+            } else {
+                // ヘッダー
+                Row(modifier = Modifier.fillMaxWidth()) {
+                    Spacer(modifier = Modifier.weight(1f))
+                    listOf("朝", "昼", "夕").forEach { label ->
+                        Text(
+                            text = label,
+                            modifier = Modifier.width(44.dp),
+                            textAlign = TextAlign.Center,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = TextHint
+                        )
+                    }
                 }
-                // リストアボタン
-                OutlinedButton(
-                    onClick = onImport,
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(10.dp),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = SecondaryBlue)
-                ) {
-                    Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("リストア")
+                Spacer(modifier = Modifier.height(6.dp))
+
+                weeks.forEach { weekStart ->
+                    val weekEnd = weekStart.plusDays(6)
+                    val weekRecs = monthRecords.filter {
+                        it.date >= weekStart.toString() && it.date <= weekEnd.toString()
+                    }
+                    if (weekRecs.isNotEmpty()) {
+                        WeekAverageRow(weekStart, weekEnd, weekRecs, today)
+                        Spacer(modifier = Modifier.height(4.dp))
+                    }
                 }
             }
+        }
+    }
+}
+
+/** 週の平均スコアを1行で表示するサブコンポーザブル */
+@Composable
+private fun WeekAverageRow(
+    weekStart: LocalDate,
+    weekEnd: LocalDate,
+    records: List<HealthRecord>,
+    today: LocalDate
+) {
+    val displayEnd = if (weekEnd.isAfter(today)) today else weekEnd
+    val label = "${weekStart.monthValue}/${weekStart.dayOfMonth}〜" +
+                "${displayEnd.monthValue}/${displayEnd.dayOfMonth}"
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = TextSecondary,
+            modifier = Modifier.weight(1f)
+        )
+        listOf(TimeSlot.MORNING, TimeSlot.NOON, TimeSlot.EVENING).forEach { slot ->
+            val avg = records.filter { it.timeSlot == slot }
+                .map { it.score }
+                .takeIf { it.isNotEmpty() }
+                ?.average()
+            val color = when {
+                avg == null -> TextHint.copy(alpha = 0.4f)
+                avg >= 8.0  -> SuccessGreen
+                avg >= 5.0  -> PrimaryTeal
+                else        -> ErrorRed
+            }
             Text(
-                text = "JSON形式でエクスポート。Google DriveやFilesに保存できます。",
-                style = MaterialTheme.typography.labelSmall,
-                color = TextHint,
-                modifier = Modifier.padding(top = 6.dp)
+                text = if (avg != null) "%.1f".format(avg) else "-",
+                modifier = Modifier.width(44.dp),
+                textAlign = TextAlign.Center,
+                style = MaterialTheme.typography.bodySmall,
+                color = color,
+                fontWeight = if (avg != null) FontWeight.Bold else FontWeight.Normal
             )
         }
     }
 }
+
 
 @Composable
 private fun StatusCard(progress: UserProgress) {

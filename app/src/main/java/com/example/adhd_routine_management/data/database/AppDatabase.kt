@@ -26,7 +26,7 @@ import com.example.adhd_routine_management.data.database.entity.*
         WeeklyGoalTask::class,
         HealthRecord::class
     ],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -106,6 +106,25 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * バージョン4→5：無遅刻連続記録のカラムを追加する。
+         * daily_records に punctualityStatus（無遅刻ステータス）を追加。
+         * user_progress に punctualStreak・maxPunctualStreak（無遅刻連続記録）を追加。
+         */
+        private val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE daily_records ADD COLUMN punctualityStatus TEXT NOT NULL DEFAULT ''"
+                )
+                db.execSQL(
+                    "ALTER TABLE user_progress ADD COLUMN punctualStreak INTEGER NOT NULL DEFAULT 0"
+                )
+                db.execSQL(
+                    "ALTER TABLE user_progress ADD COLUMN maxPunctualStreak INTEGER NOT NULL DEFAULT 0"
+                )
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 Room.databaseBuilder(
@@ -113,7 +132,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "adhd_routine_db"
                 )
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                 .build().also { INSTANCE = it }
             }
         }

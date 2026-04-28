@@ -1,5 +1,6 @@
 package com.example.adhd_routine_management.notification
 
+import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -13,6 +14,10 @@ object NotificationHelper {
 
     const val CHANNEL_TASK    = "task_reminder"
     const val CHANNEL_NUDGE   = "nudge_reminder"
+
+    // タスク通知をまとめるグループキーと、サマリー通知のID
+    private const val GROUP_TASKS            = "group_tasks"
+    private const val NOTIF_ID_GROUP_SUMMARY = 10000
 
     /** 通知チャンネルを作成（Android 8.0以降で必要） */
     fun createChannels(context: Context) {
@@ -71,11 +76,12 @@ object NotificationHelper {
 
         val notification = NotificationCompat.Builder(context, CHANNEL_TASK)
             .setSmallIcon(android.R.drawable.ic_popup_reminder)
-            .setContentTitle("ルーティンの時間です！")
-            .setContentText(taskName)
+            .setContentTitle("「${taskName}」の時間です！")
+            .setContentText("タップして完了を記録しよう")
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setContentIntent(openPendingIntent)
             .setAutoCancel(true)
+            .setGroup(GROUP_TASKS)
             .addAction(
                 android.R.drawable.ic_menu_recent_history,
                 "${snoozeDurationMinutes}分後にスヌーズ",
@@ -85,6 +91,54 @@ object NotificationHelper {
 
         val manager = context.getSystemService(NotificationManager::class.java)
         manager.notify(taskId, notification)
+    }
+
+    /**
+     * タスク通知グループのサマリーを更新する。
+     * Android 7.0以降では、同グループの通知が2件以上ある場合に
+     * 通知ドロワーで折りたたんで1件に見せるサマリー通知が必要。
+     * 1件以下のときはサマリーを消す。
+     */
+    fun updateTaskGroupSummary(context: Context) {
+        val manager = context.getSystemService(NotificationManager::class.java)
+
+        // アクティブな（表示中の）タスクグループ通知の件数を数える
+        val taskNotifCount = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            manager.activeNotifications.count { sbn ->
+                sbn.notification.group == GROUP_TASKS &&
+                (sbn.notification.flags and Notification.FLAG_GROUP_SUMMARY) == 0
+            }
+        } else {
+            // API 23未満はグループ未対応なのでサマリー不要
+            0
+        }
+
+        if (taskNotifCount < 2) {
+            // 1件以下ならサマリー不要なので消す
+            manager.cancel(NOTIF_ID_GROUP_SUMMARY)
+            return
+        }
+
+        val intent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            context, 0, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val summary = NotificationCompat.Builder(context, CHANNEL_TASK)
+            .setSmallIcon(android.R.drawable.ic_popup_reminder)
+            .setContentTitle("${taskNotifCount}件のタスクが待っています")
+            .setContentText("タップして確認しよう")
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setContentIntent(pendingIntent)
+            .setAutoCancel(true)
+            .setGroup(GROUP_TASKS)
+            .setGroupSummary(true)
+            .build()
+
+        manager.notify(NOTIF_ID_GROUP_SUMMARY, summary)
     }
 
     /** 催促通知を表示する（キャラのセリフ付き） */

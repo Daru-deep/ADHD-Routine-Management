@@ -42,9 +42,10 @@ fun HomeScreen(
     var showGiveUpDialog by remember { mutableStateOf(false) }
     var showMondayPrompt by remember { mutableStateOf(false) }
 
-    // 月曜日かつ今週の目標が未設定の場合にプロンプトを表示
-    // LaunchedEffect はすでにコルーチン内で動くので、直接 suspend 関数を呼べる
+    // 画面が表示されるたびに日付をチェックし、日付が変わっていたら DB 監視を切り替える
     LaunchedEffect(Unit) {
+        vm.refreshDate()
+
         val today = LocalDate.now()
         if (today.dayOfWeek == DayOfWeek.MONDAY) {
             val goal = weeklyGoalRepository.getGoalForWeekOnce(today.toString())
@@ -123,6 +124,17 @@ fun HomeScreen(
                 HealthRecordCard(
                     healthRecords = state.healthRecords,
                     onRecordScore = { slot, score -> vm.saveHealthRecord(slot, score) }
+                )
+            }
+
+            // 無遅刻記録カード
+            item {
+                PunctualityCard(
+                    punctualityStatus = state.punctualityStatus,
+                    punctualStreak    = state.punctualStreak,
+                    maxPunctualStreak = state.maxPunctualStreak,
+                    onStatusSelected  = { status -> vm.savePunctuality(status) },
+                    isLocked          = state.punctualityStatus.isNotEmpty()
                 )
             }
 
@@ -507,6 +519,145 @@ private fun HealthSlotRow(
                     )
                 }
             }
+        }
+    }
+}
+
+/**
+ * 無遅刻記録カード。
+ * 寝る前に「無遅刻」「遅刻」「用事無」のいずれかをタップして記録する。
+ * 連続記録と過去最高記録を表示する。
+ */
+@Composable
+private fun PunctualityCard(
+    punctualityStatus: String,
+    punctualStreak: Int,
+    maxPunctualStreak: Int,
+    onStatusSelected: (String) -> Unit,
+    isLocked: Boolean = false
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = DarkSurface)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            // タイトルと連続記録
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "無遅刻記録",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = TextSecondary
+                )
+                if (punctualStreak > 0) {
+                    Text(
+                        "🏃 ${punctualStreak}日連続！",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = SuccessGreen,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+            if (maxPunctualStreak > 0) {
+                Text(
+                    "最高記録: ${maxPunctualStreak}日",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = TextHint
+                )
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+            // ステータス選択ボタン（3択）
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                PunctualityButton(
+                    label     = "無遅刻",
+                    emoji     = "✅",
+                    isSelected = punctualityStatus == "on_time",
+                    selectedColor = SuccessGreen,
+                    modifier  = Modifier.weight(1f),
+                    enabled   = !isLocked,
+                    onClick   = { onStatusSelected("on_time") }
+                )
+                PunctualityButton(
+                    label     = "遅刻",
+                    emoji     = "⏰",
+                    isSelected = punctualityStatus == "late",
+                    selectedColor = ErrorRed,
+                    modifier  = Modifier.weight(1f),
+                    enabled   = !isLocked,
+                    onClick   = { onStatusSelected("late") }
+                )
+                PunctualityButton(
+                    label     = "用事無",
+                    emoji     = "📅",
+                    isSelected = punctualityStatus == "no_appointment",
+                    selectedColor = TextSecondary,
+                    modifier  = Modifier.weight(1f),
+                    enabled   = !isLocked,
+                    onClick   = { onStatusSelected("no_appointment") }
+                )
+            }
+            if (isLocked) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = "今日は記録済みです",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = TextHint
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PunctualityButton(
+    label: String,
+    emoji: String,
+    isSelected: Boolean,
+    selectedColor: androidx.compose.ui.graphics.Color,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    onClick: () -> Unit
+) {
+    val bgColor = if (isSelected) selectedColor.copy(alpha = 0.2f) else DarkSurfaceVar
+    val borderColor = if (isSelected) selectedColor else DarkSurfaceVar
+    val textColor = if (isSelected) selectedColor else TextHint
+
+    OutlinedButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = modifier,
+        shape = RoundedCornerShape(10.dp),
+        border = BorderStroke(1.dp, borderColor),
+        colors = ButtonDefaults.outlinedButtonColors(
+            containerColor = bgColor,
+            contentColor = textColor
+        ),
+        contentPadding = PaddingValues(vertical = 8.dp, horizontal = 4.dp)
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(
+                text = emoji,
+                fontSize = 18.sp,
+                modifier = Modifier.fillMaxWidth(),
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+            )
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                color = textColor,
+                modifier = Modifier.fillMaxWidth(),
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+            )
         }
     }
 }

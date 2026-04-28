@@ -9,6 +9,11 @@ import com.example.adhd_routine_management.data.database.entity.*
 import kotlinx.coroutines.flow.Flow
 import java.time.LocalDate
 
+/** 無遅刻ステータスの定数（DailyRecord側と共通） */
+private const val PUNCTUALITY_ON_TIME        = "on_time"
+private const val PUNCTUALITY_LATE           = "late"
+private const val PUNCTUALITY_NO_APPOINTMENT = "no_appointment"
+
 /**
  * Repository はデータ取得の窓口。
  * ViewModel はこのクラスを通じてDBを操作する。
@@ -169,7 +174,7 @@ class TaskRepository(
             )
         )
 
-        // 日次記録も更新
+        // 日次記録も更新（punctualityStatus など既存フィールドを引き継ぐ）
         val existing = dailyRecordDao.getRecordForDateOnce(date)
         dailyRecordDao.insertOrUpdate(
             DailyRecord(
@@ -177,7 +182,52 @@ class TaskRepository(
                 totalTasks = totalCount,
                 completedTasks = completedCount,
                 pointsEarned = (existing?.pointsEarned ?: 0) + earnedPoints,
-                isGivenUp = existing?.isGivenUp ?: false
+                isGivenUp = existing?.isGivenUp ?: false,
+                punctualityStatus = existing?.punctualityStatus ?: ""
+            )
+        )
+    }
+
+    /**
+     * 無遅刻ステータスを保存し、無遅刻連続記録（punctualStreak）を更新する。
+     *
+     * ルール：
+     *   - "on_time"（無遅刻）→ streak +1（当日に既に"on_time"なら変化なし）
+     *   - "late"（遅刻）   → streak をリセット（0）
+     *   - "no_appointment"（用事無）→ streak は変化なし
+     *       ただし当日が"on_time"から変更された場合は +1 を取り消す
+     */
+    suspend fun savePunctualityStatus(date: String, status: String) {
+        val existing = dailyRecordDao.getRecordForDateOnce(date)
+        val previousStatus = existing?.punctualityStatus ?: ""
+
+        // 日次記録を更新（なければ新規作成）
+        dailyRecordDao.insertOrUpdate(
+            (existing ?: DailyRecord(date = date)).copy(punctualityStatus = status)
+        )
+
+        // ステータスが変わっていない場合は streak も変えない
+        if (status == previousStatus) return
+
+        val progress = getProgressOnce()
+        val newStreak: Int = when {
+            // 無遅刻に変更（以前が無遅刻でない）→ +1
+            status == PUNCTUALITY_ON_TIME && previousStatus != PUNCTUALITY_ON_TIME ->
+                progress.punctualStreak + 1
+            // 遅刻に変更 → リセット
+            status == PUNCTUALITY_LATE ->
+                0
+            // 用事無に変更（以前が無遅刻）→ +1 を取り消す
+            status == PUNCTUALITY_NO_APPOINTMENT && previousStatus == PUNCTUALITY_ON_TIME ->
+                maxOf(0, progress.punctualStreak - 1)
+            // その他（例：遅刻→用事無）→ 変化なし
+            else -> progress.punctualStreak
+        }
+
+        saveProgress(
+            progress.copy(
+                punctualStreak    = newStreak,
+                maxPunctualStreak = maxOf(progress.maxPunctualStreak, newStreak)
             )
         )
     }
@@ -212,7 +262,8 @@ class TaskRepository(
                 totalTasks = total,
                 completedTasks = existing?.completedTasks ?: 0,
                 pointsEarned = existing?.pointsEarned ?: 0,
-                isGivenUp = true
+                isGivenUp = true,
+                punctualityStatus = existing?.punctualityStatus ?: ""
             )
         )
     }

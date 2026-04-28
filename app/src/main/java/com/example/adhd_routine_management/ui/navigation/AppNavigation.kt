@@ -13,8 +13,10 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import com.example.adhd_routine_management.data.repository.TaskRepository
 import com.example.adhd_routine_management.data.repository.WeeklyGoalRepository
+import com.example.adhd_routine_management.ui.dashboard.DashboardScreen
 import com.example.adhd_routine_management.ui.home.HomeScreen
 import com.example.adhd_routine_management.ui.progress.ProgressScreen
+import com.example.adhd_routine_management.ui.settings.SettingsScreen
 import com.example.adhd_routine_management.ui.task.AddEditTaskScreen
 import com.example.adhd_routine_management.ui.task.TaskListScreen
 import com.example.adhd_routine_management.ui.theme.*
@@ -23,6 +25,8 @@ import com.example.adhd_routine_management.ui.weeklygoal.WeeklyGoalSetupScreen
 
 /** アプリ内の画面ルート定数 */
 sealed class Screen(val route: String) {
+    object Dashboard      : Screen("dashboard")
+    object Settings       : Screen("settings")
     object Home           : Screen("home")
     object TaskList       : Screen("task_list")
     object AddTask        : Screen("add_task")
@@ -52,9 +56,9 @@ fun AppNavHost(
             AppBottomNavigationBar(
                 currentRoute = currentRoute,
                 onNavigate = { route ->
-                    // タブ切り替え時は Home までバックスタックをクリアして再利用する
+                    // タブ切り替え時は Dashboard までバックスタックをクリアして再利用する
                     navController.navigate(route) {
-                        popUpTo(Screen.Home.route) { saveState = true }
+                        popUpTo(Screen.Dashboard.route) { saveState = true }
                         launchSingleTop = true
                         restoreState = true
                     }
@@ -65,9 +69,22 @@ fun AppNavHost(
         // innerPadding にボトムナビの高さが含まれるので、NavHost に渡してコンテンツが隠れないようにする
         NavHost(
             navController = navController,
-            startDestination = Screen.Home.route,
+            startDestination = Screen.Dashboard.route,
             modifier = modifier.padding(innerPadding)
         ) {
+            composable(Screen.Dashboard.route) {
+                DashboardScreen(
+                    repository = repository,
+                    onNavigateToSettings = { navController.navigate(Screen.Settings.route) }
+                )
+            }
+            composable(Screen.Settings.route) {
+                SettingsScreen(
+                    repository           = repository,
+                    weeklyGoalRepository = weeklyGoalRepository,
+                    onBack               = { navController.popBackStack() }
+                )
+            }
             composable(Screen.Home.route) {
                 HomeScreen(
                     repository = repository,
@@ -97,10 +114,7 @@ fun AppNavHost(
                 )
             }
             composable(Screen.Progress.route) {
-                ProgressScreen(
-                    repository           = repository,
-                    weeklyGoalRepository = weeklyGoalRepository
-                )
+                ProgressScreen(repository = repository)
             }
             composable(Screen.WeeklyGoal.route) {
                 WeeklyGoalScreen(
@@ -132,6 +146,13 @@ private fun AppBottomNavigationBar(
         unselectedTextColor = TextSecondary
     )
     NavigationBar(containerColor = DarkSurface) {
+        NavigationBarItem(
+            selected = currentRoute == Screen.Dashboard.route,
+            onClick  = { onNavigate(Screen.Dashboard.route) },
+            icon     = { Icon(Icons.Default.Dashboard, contentDescription = "概要") },
+            label    = { Text("概要") },
+            colors   = itemColors
+        )
         NavigationBarItem(
             selected = currentRoute == Screen.Home.route,
             onClick  = { onNavigate(Screen.Home.route) },
